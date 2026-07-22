@@ -2,8 +2,6 @@ name: UI Tests
 
 on:
   push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -30,6 +28,15 @@ jobs:
           --base-url https://www.saucedemo.com
           --browser chromium
           --tracing retain-on-failure
+          --html=report.html
+          --self-contained-html
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: html-report
+          path: report.html
 
       - name: Upload traces on failure
         if: failure()
