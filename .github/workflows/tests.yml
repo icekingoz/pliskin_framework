@@ -1,11 +1,46 @@
-name: UI Tests
+name: Tests
 
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
 jobs:
-  test:
+  # Fast job: pure HTTP, no browsers to install. Finishes in seconds and gives
+  # you a signal long before the UI job is done.
+  api:
+    name: API tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # No `playwright install` here on purpose -- that is the whole point of
+      # keeping Playwright out of the root conftest.
+      - name: Run API tests
+        run: >
+          python -m pytest tests/api
+          -m api
+          --html=api-report.html
+          --self-contained-html
+
+      - name: Upload API report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: api-report
+          path: api-report.html
+
+  ui:
+    name: UI tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -22,21 +57,21 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
 
-      - name: Run tests
+      - name: Run UI tests
         run: >
-          python -m pytest tests/
+          python -m pytest tests/ui
           --base-url https://www.saucedemo.com
           --browser chromium
           --tracing retain-on-failure
-          --html=report.html
+          --html=ui-report.html
           --self-contained-html
 
-      - name: Upload HTML report
+      - name: Upload UI report
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: html-report
-          path: report.html
+          name: ui-report
+          path: ui-report.html
 
       - name: Upload traces on failure
         if: failure()
