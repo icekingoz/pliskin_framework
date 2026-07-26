@@ -5,6 +5,16 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Allow the report job to push the generated site to the gh-pages branch.
+permissions:
+  contents: write
+
+# A second push while a run is in flight cancels the first: two jobs racing to
+# push gh-pages is the classic way to corrupt Allure's history.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Fast job: pure HTTP, no browsers to install. Finishes in seconds and gives
   # you a signal long before the UI job is done.
@@ -29,14 +39,29 @@ jobs:
         run: >
           python -m pytest tests/api
           -m api
+          --junitxml=junit-api.xml
           --html=api-report.html
           --self-contained-html
 
-      - name: Upload API report
+      # `always()` so the summary is written for failing runs too -- which is
+      # precisely when someone wants to read it.
+      - name: Job summary
+        if: always()
+        run: python scripts/junit_summary.py junit-api.xml "API tests"
+
+      - name: Upload Allure results
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: api-report
+          name: allure-results-api
+          path: allure-results
+          retention-days: 7
+
+      - name: Upload pytest-html report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: api-report-html
           path: api-report.html
 
   ui:
@@ -62,20 +87,80 @@ jobs:
           python -m pytest tests/ui
           --base-url https://www.saucedemo.com
           --browser chromium
-          --tracing retain-on-failure
+          --junitxml=junit-ui.xml
           --html=ui-report.html
           --self-contained-html
 
-      - name: Upload UI report
+      - name: Job summary
+        if: always()
+        run: python scripts/junit_summary.py junit-ui.xml "UI tests"
+
+      - name: Upload Allure results
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: ui-report
+          name: allure-results-ui
+          path: allure-results
+          retention-days: 7
+
+      - name: Upload pytest-html report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ui-report-html
           path: ui-report.html
 
-      - name: Upload traces on failure
+      # Traces, videos and screenshots Playwright wrote for failing tests.
+      - name: Upload Playwright artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-traces
+          name: playwright-artifacts
           path: test-results/
+
+  # Merges both suites into one Allure site and publishes it to gh-pages.
+  report:
+    name: Publish Allure report
+    needs: [api, ui]
+    # `always()` matters: a report that only publishes when everything passed is
+    # useless, because the run you most want to inspect is the failing one.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Allure results from both suites
+        uses: actions/download-artifact@v6
+        with:
+          pattern: allure-results-*
+          merge-multiple: true
+          path: allure-results
+
+      # The existing site carries the history that makes trend graphs work.
+      # First ever run has no gh-pages branch yet, hence continue-on-error.
+      - name: Fetch previous report history
+        uses: actions/checkout@v6
+        continue-on-error: true
+        with:
+          ref: gh-pages
+          path: gh-pages
+
+      - name: Build Allure report
+        uses: simple-elf/allure-report-action@v1.12
+        with:
+          allure_results: allure-results
+          gh_pages: gh-pages
+          allure_history: allure-history
+          keep_reports: 30
+
+      - name: Publish to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: allure-history
+
+      - name: Link the report from the run page
+        if: always()
+        run: |
+          echo "## 📊 Allure report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ github.run_number }}/" >> "$GITHUB_STEP_SUMMARY"

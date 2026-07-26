@@ -6,6 +6,7 @@ import pytest
 from playwright.sync_api import Page
 
 from pages.login_page import LoginPage
+from support.reporting import attach_html, attach_png, attach_text
 
 
 @pytest.fixture(scope="session")
@@ -34,3 +35,40 @@ def logged_in_page(page: Page, sauce_credentials: dict[str, str]) -> Page:
     login_page.open()
     login_page.login(**sauce_credentials)
     return page
+
+
+# --- failure capture --------------------------------------------------------
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
+    """Attach a screenshot, the URL and the DOM whenever a UI test fails.
+
+    Playwright --screenshot=only-on-failure already writes a PNG to
+    test-results folder. This hook exists because the file lives in a downloadble zip, and nobody has time for that.
+    """
+    report = yield
+
+    # `call` runs three times per test (setup/call/teardown); only act on the
+    # phase that actually failed, or you attach the same screenshot three times.
+    if report.when != "call" or not report.failed:
+        return report
+
+    page: Page | None = item.funcargs.get("page")
+    if page is None:  # not a browser test -- nothing to capture
+        return report
+
+    try:
+        attach_png(
+            f"screenshot-{item.name}",
+            page.screenshot(full_page=True),
+            item=item,
+            report=report,
+        )
+        attach_text("page-url", page.url, item=item, report=report)
+        attach_html("page-source", page.content(), item=item, report=report)
+    except Exception as exc:  # pragma: no cover
+        # The page can already be closed if the failure was a crash or timeout
+        # during teardown. Record why capture failed rather than masking the
+        # real test failure with a second, unrelated error.
+        attach_text("capture-error", f"{type(exc).__name__}: {exc}", item=item, report=report)
+
+    return report
