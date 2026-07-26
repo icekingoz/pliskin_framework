@@ -15,6 +15,11 @@ concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Bump deliberately, not automatically -- a report generator that changes
+  # under you is a bad thing to debug.
+  ALLURE_VERSION: "2.43.0"
+
 jobs:
   # Fast job: pure HTTP, no browsers to install. Finishes in seconds and gives
   # you a signal long before the UI job is done.
@@ -127,6 +132,8 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+
       - name: Download Allure results from both suites
         uses: actions/download-artifact@v6
         with:
@@ -143,24 +150,69 @@ jobs:
           ref: gh-pages
           path: gh-pages
 
-      - name: Build Allure report
-        uses: simple-elf/allure-report-action@v1.12
+      - name: Restore history into the results
+        run: |
+          mkdir -p allure-results/history
+          if [ -d gh-pages/last-history ]; then
+            cp -r gh-pages/last-history/. allure-results/history/
+            echo "Carried forward $(ls -1 allure-results/history | wc -l) history files."
+          else
+            echo "No previous history -- trends start from this run."
+          fi
+
+      # Makes the report link back to the run that produced it.
+      - name: Describe the executor
+        run: |
+          PAGES="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          cat > allure-results/executor.json <<JSON
+          {
+            "name": "GitHub Actions",
+            "type": "github",
+            "reportName": "${{ github.event.repository.name }}",
+            "url": "${PAGES}",
+            "reportUrl": "${PAGES}/${{ github.run_number }}/",
+            "buildUrl": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "buildName": "Run #${{ github.run_number }}",
+            "buildOrder": ${{ github.run_number }}
+          }
+          JSON
+
+      # Allure's CLI is a Java application.
+      - uses: actions/setup-java@v4
         with:
-          allure_results: allure-results
-          gh_pages: gh-pages
-          allure_history: allure-history
-          keep_reports: 30
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Allure CLI
+        run: |
+          curl -sSL --retry 3 -o allure.tgz \
+            "https://github.com/allure-framework/allure2/releases/download/${ALLURE_VERSION}/allure-${ALLURE_VERSION}.tgz"
+          tar -xzf allure.tgz
+          echo "$PWD/allure-${ALLURE_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Generate report
+        run: allure generate allure-results --clean -o allure-report
+
+      - name: Assemble the site
+        run: |
+          chmod +x scripts/assemble_allure_site.sh
+          scripts/assemble_allure_site.sh \
+            allure-report gh-pages site "${{ github.run_number }}" 30
 
       - name: Publish to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages
-          publish_dir: allure-history
+          publish_dir: site
 
       - name: Link the report from the run page
         if: always()
         run: |
-          echo "## 📊 Allure report" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/${{ github.run_number }}/" >> "$GITHUB_STEP_SUMMARY"
+          PAGES="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          {
+            echo "## 📊 Allure report"
+            echo ""
+            echo "- [Latest report](${PAGES}/latest/)"
+            echo "- [This run (#${{ github.run_number }})](${PAGES}/${{ github.run_number }}/)"
+          } >> "$GITHUB_STEP_SUMMARY"
