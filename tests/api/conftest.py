@@ -12,6 +12,15 @@ from api.ping_client import PingClient
 from api.booking_client import BookingClient
 
 from api.models import build_booking
+from support.reporting import attach_text
+
+# --- request/response recording ---------------------------------------------
+# Headers whose values must never reach a published report.
+_REDACT = {"cookie", "authorization", "set-cookie"}
+_MAX_BODY_CHARS = 2_000
+
+# Every HTTP exchange made during the current test. 
+_EXCHANGES: list[str] = []
 
 
 @pytest.fixture(scope="session")
@@ -26,6 +35,13 @@ def api_session() -> Iterator[requests.Session]:
             {"Content-Type": "application/json", "Accept": "application/json"}
         )
         yield session
+
+@pytest.fixture(autouse=True)
+def _isolate_exchanges() -> Iterator[None]:
+    """Each test's failure report should show that test's traffic, not the run's."""
+    _EXCHANGES.clear()
+    yield
+
 
 
 # --- clients ----------------------------------------------------------------
@@ -98,3 +114,25 @@ def created_booking(
     yield booking_id, booking_payload
 
     booking_client.delete(booking_id, auth_token)
+
+
+# --- failure capture --------------------------------------------------------
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
+    """Attach the full HTTP conversation whenever an API test fails.
+
+    The API-side equivalent of a screenshot. ``assert response.status_code == 200``
+    tells you a test failed; this tells you what was sent and what came back.
+    """
+    report = yield
+
+    if report.when == "call" and report.failed and _EXCHANGES:
+        attach_text(
+            f"http-exchanges-{item.name}",
+            "\n\n".join(_EXCHANGES),
+            item=item,
+            report=report,
+        )
+
+    return report
+
