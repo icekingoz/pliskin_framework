@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Iterator
+from typing import Iterator, Any
 
 import pytest
 import requests
 
 from api.auth_client import AuthClient
 from api.ping_client import PingClient
+from api.booking_client import BookingClient
 
 
 @pytest.fixture(scope="session")
@@ -35,6 +36,10 @@ def auth_client(api_base_url: str, api_session: requests.Session) -> AuthClient:
 def ping_client(api_base_url: str, api_session: requests.Session) -> PingClient:
     return PingClient(api_base_url, api_session)
 
+@pytest.fixture
+def booking_client(api_base_url: str, api_session: requests.Session) -> BookingClient:
+    return BookingClient(api_base_url, api_session)
+
 
 # --- auth -------------------------------------------------------------------
 @pytest.fixture(scope="session")
@@ -60,3 +65,34 @@ def auth_token(
     # so the status code alone proves nothing.
     assert token, f"No token in auth response: {response.text}"
     return token
+
+# --- test data --------------------------------------------------------------
+@pytest.fixture
+def booking_payload() -> dict[str, Any]:
+    """A valid, unique payload. Nothing has been sent to the API yet."""
+    return build_booking()
+
+
+@pytest.fixture
+def created_booking(
+    booking_client: BookingClient,
+    booking_payload: dict[str, Any],
+    auth_token: str,
+) -> Iterator[tuple[int, dict[str, Any]]]:
+    """A booking that exists on the server, cleaned up afterwards.
+
+    Yields ``(booking_id, payload)``.
+
+    The teardown is the point of this fixture: it is what lets you run the
+    suite twice in a row and get the same result. Deliberately tolerant --
+    a test that already deleted the booking should not fail in teardown.
+    """
+    response = booking_client.create(booking_payload)
+    assert response.status_code == 200, (
+        f"Setup failed to create a booking: HTTP {response.status_code} -- {response.text}"
+    )
+    booking_id = response.json()["bookingid"]
+
+    yield booking_id, booking_payload
+
+    booking_client.delete(booking_id, auth_token)
