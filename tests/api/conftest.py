@@ -11,6 +11,8 @@ from api.auth_client import AuthClient
 from api.ping_client import PingClient
 from api.booking_client import BookingClient
 
+from api.models import build_booking
+
 
 @pytest.fixture(scope="session")
 def api_session() -> Iterator[requests.Session]:
