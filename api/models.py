@@ -27,7 +27,7 @@ def build_booking(
 
     payload: dict[str, Any] = {
         "firstname": "Snake",
-        "lastname": f"Pliskin-{uuid4().hex[:8]}",
+        "lastname": f"Plissken-{uuid4().hex[:8]}",
         "totalprice": 111,
         "depositpaid": True,
         "bookingdates": {

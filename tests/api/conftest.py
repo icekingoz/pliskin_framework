@@ -23,6 +23,37 @@ _MAX_BODY_CHARS = 2_000
 _EXCHANGES: list[str] = []
 
 
+def _redacted(headers: Any) -> dict[str, str]:
+    return {
+        k: ("<redacted>" if k.lower() in _REDACT else v) for k, v in dict(headers).items()
+    }
+
+
+def _truncate(body: Any) -> str:
+    text = "" if body is None else str(body)
+    return text if len(text) <= _MAX_BODY_CHARS else f"{text[:_MAX_BODY_CHARS]}... <truncated>"
+
+
+def _record_exchange(response: requests.Response, *args: Any, **kwargs: Any) -> None:
+    """``requests`` response hook -- fires on every call the suite makes."""
+    try:
+        request = response.request
+        _EXCHANGES.append(
+            "\n".join(
+                [
+                    f"--> {request.method} {request.url}",
+                    f"    headers: {_redacted(request.headers)}",
+                    f"    body:    {_truncate(request.body)}",
+                    f"<-- {response.status_code} ({response.elapsed.total_seconds():.3f}s)",
+                    f"    headers: {_redacted(response.headers)}",
+                    f"    body:    {_truncate(response.text)}",
+                ]
+            )
+        )
+    except Exception:  # pragma: no cover - logging must never break a request
+        pass
+
+
 @pytest.fixture(scope="session")
 def api_session() -> Iterator[requests.Session]:
     """One connection pool for the whole run.
@@ -34,6 +65,7 @@ def api_session() -> Iterator[requests.Session]:
         session.headers.update(
             {"Content-Type": "application/json", "Accept": "application/json"}
         )
+        session.hooks["response"].append(_record_exchange)
         yield session
 
 @pytest.fixture(autouse=True)
